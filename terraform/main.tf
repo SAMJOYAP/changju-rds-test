@@ -76,13 +76,19 @@ data "aws_vpc" "default" {
   default = true
 }
 
-# [수정] 여러 AZ의 서브넷을 확실히 가져오기 위해 필터 추가
+# 수정된 부분: 가용 영역에 상관없이 모든 서브넷을 가져옵니다.
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
-  # 기본 VPC의 모든 서브넷을 가져옵니다. 보통 기본 VPC는 각 AZ마다 서브넷이 하나씩 있습니다.
+
+  # 추가: 특정 AZ에 편중되지 않도록 명시적으로 필터를 제외하거나 
+  # 아래와 같이 서브넷 상태가 'available'인 것만 가져오게 설정합니다.
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
 }
 
 # Random DB password
