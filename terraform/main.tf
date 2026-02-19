@@ -67,11 +67,10 @@ locals {
   db_port             = local.engine_config[var.db_engine].port
   cloudwatch_exports  = local.engine_config[var.db_engine].logs
   
-  # 랜덤 값이 포함된 공통 이름 변수
   random_name = "${var.identifier}-${random_id.suffix.hex}"
 }
 
-# 1. [수정] Default VPC 대신 EKS 클러스터 VPC를 태그로 검색
+# 1. 태그를 통해 EKS 클러스터가 포함된 VPC 검색
 data "aws_vpc" "selected" {
   filter {
     name   = "tag:Name"
@@ -79,8 +78,7 @@ data "aws_vpc" "selected" {
   }
 }
 
-# 2. [수정] 해당 VPC 내에서 'private' 태그가 붙은 모든 서브넷 검색
-# 이미지상 'toy-practice-eks-private-*' 서브넷들이 여러 AZ에 걸쳐 있습니다.
+# 2. [핵심 수정] 이미지상의 대소문자(Private)를 반영한 서브넷 필터
 data "aws_subnets" "selected" {
   filter {
     name   = "vpc-id"
@@ -89,7 +87,8 @@ data "aws_subnets" "selected" {
 
   filter {
     name   = "tag:Name"
-    values = ["*private*"] 
+    # 대소문자 구분을 방지하기 위해 두 가지 패턴을 모두 넣습니다.
+    values = ["*Private*", "*private*"] 
   }
 }
 
@@ -100,7 +99,7 @@ resource "random_password" "db" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
-# 3. [수정] 위에서 찾은 'selected' 서브넷들을 사용 (2개 이상의 AZ 충족)
+# 3. DB Subnet Group (EKS VPC 내의 여러 AZ 서브넷 사용)
 resource "aws_db_subnet_group" "main" {
   name        = "${local.random_name}-subnet-group"
   subnet_ids  = data.aws_subnets.selected.ids
@@ -109,7 +108,7 @@ resource "aws_db_subnet_group" "main" {
   tags = { Name = "${local.random_name}-subnet-group" }
 }
 
-# 4. [수정] 보안 그룹의 VPC ID도 EKS VPC로 변경
+# 4. Security Group (EKS VPC 내 생성)
 resource "aws_security_group" "rds" {
   name_prefix = "${var.identifier}-"
   vpc_id      = data.aws_vpc.selected.id
@@ -232,22 +231,6 @@ resource "aws_rds_cluster_instance" "writer" {
   performance_insights_enabled = var.performance_insights
 
   tags = { Name = "${var.identifier}-writer" }
-}
-
-# Aurora reader instance (Multi-AZ)
-resource "aws_rds_cluster_instance" "reader" {
-  count = local.is_aurora && var.multi_az ? 1 : 0
-
-  identifier         = "${var.identifier}-reader"
-  cluster_identifier = aws_rds_cluster.main[0].id
-  instance_class     = var.instance_class
-  engine             = aws_rds_cluster.main[0].engine
-  engine_version     = aws_rds_cluster.main[0].engine_version
-
-  db_parameter_group_name      = aws_db_parameter_group.main.name
-  performance_insights_enabled = var.performance_insights
-
-  tags = { Name = "${var.identifier}-reader" }
 }
 
 # ─── Secrets Manager ───────────────────────────────────────────────────────
