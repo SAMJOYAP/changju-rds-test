@@ -11,15 +11,6 @@ terraform {
       version = "~> 3.0"
     }
   }
-
-  # Uncomment to use S3 backend for state management
-  # backend "s3" {
-  #   bucket         = "your-terraform-state-bucket"
-  #   key            = "changju-rds-test/terraform.tfstate"
-  #   region         = "ap-northeast-2"
-  #   encrypt        = true
-  #   dynamodb_table = "terraform-lock"
-  # }
 }
 
 provider "aws" {
@@ -34,6 +25,11 @@ provider "aws" {
       Repository  = "https://github.com/SAMJOYAP/changju-rds-test.git"
     }
   }
+}
+
+# [수정] 이름 중복 방지를 위한 랜덤 접미사 생성
+resource "random_id" "suffix" {
+  byte_length = 4
 }
 
 locals {
@@ -70,6 +66,9 @@ locals {
   db_family           = local.engine_config[var.db_engine].family
   db_port             = local.engine_config[var.db_engine].port
   cloudwatch_exports  = local.engine_config[var.db_engine].logs
+  
+  # [수정] 리소스 이름에 랜덤 접미사 결합
+  random_name = "${var.identifier}-${random_id.suffix.hex}"
 }
 
 # Default VPC and subnets
@@ -77,11 +76,13 @@ data "aws_vpc" "default" {
   default = true
 }
 
+# [수정] 여러 AZ의 서브넷을 확실히 가져오기 위해 필터 추가
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
+  # 기본 VPC의 모든 서브넷을 가져옵니다. 보통 기본 VPC는 각 AZ마다 서브넷이 하나씩 있습니다.
 }
 
 # Random DB password
@@ -91,13 +92,13 @@ resource "random_password" "db" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
-# DB Subnet Group
+# [수정] DB Subnet Group: 이름에 랜덤 값 추가
 resource "aws_db_subnet_group" "main" {
-  name        = "${var.identifier}-subnet-group"
+  name        = "${local.random_name}-subnet-group"
   subnet_ids  = data.aws_subnets.default.ids
   description = "Subnet group for ${var.identifier}"
 
-  tags = { Name = "${var.identifier}-subnet-group" }
+  tags = { Name = "${local.random_name}-subnet-group" }
 }
 
 # Security Group
@@ -127,12 +128,12 @@ resource "aws_security_group" "rds" {
   }
 }
 
-# DB Parameter Group
+# [수정] DB Parameter Group: 이름에 랜덤 값 추가
 resource "aws_db_parameter_group" "main" {
-  name   = "${var.identifier}-params"
+  name   = "${local.random_name}-params"
   family = local.db_family
 
-  tags = { Name = "${var.identifier}-params" }
+  tags = { Name = "${local.random_name}-params" }
 }
 
 # ─── Standard RDS (postgres / mysql) ───────────────────────────────────────
@@ -140,7 +141,7 @@ resource "aws_db_parameter_group" "main" {
 resource "aws_db_instance" "main" {
   count = local.is_aurora ? 0 : 1
 
-  identifier        = var.identifier
+  identifier        = var.identifier # Instance ID는 중복 시 삭제가 쉬우므로 그대로 두거나 local.random_name으로 변경 가능
   engine            = var.db_engine
   engine_version    = local.db_engine_version
   instance_class    = var.instance_class
@@ -176,10 +177,10 @@ resource "aws_db_instance" "main" {
 
 resource "aws_rds_cluster_parameter_group" "aurora" {
   count  = local.is_aurora ? 1 : 0
-  name   = "${var.identifier}-cluster-params"
+  name   = "${local.random_name}-cluster-params" # [수정] 랜덤 이름 적용
   family = local.db_family
 
-  tags = { Name = "${var.identifier}-cluster-params" }
+  tags = { Name = "${local.random_name}-cluster-params" }
 }
 
 resource "aws_rds_cluster" "main" {
@@ -243,12 +244,13 @@ resource "aws_rds_cluster_instance" "reader" {
 
 # ─── Secrets Manager ───────────────────────────────────────────────────────
 
+# [수정] Secrets Manager: 이름에 랜덤 값 추가
 resource "aws_secretsmanager_secret" "db_credentials" {
   count       = var.secrets_manager ? 1 : 0
-  name        = "${var.identifier}/db-credentials"
+  name        = "${local.random_name}/db-credentials"
   description = "Database credentials for ${var.identifier}"
 
-  tags = { Name = "${var.identifier}-db-credentials" }
+  tags = { Name = "${local.random_name}-db-credentials" }
 }
 
 resource "aws_secretsmanager_secret_version" "db_credentials" {
