@@ -43,7 +43,7 @@ locals {
       logs    = ["postgresql", "upgrade"]
     }
     "mysql" = {
-      version = "8.0.35"
+      version = "8.0.39"
       family  = "mysql8.0"
       port    = 3306
       logs    = ["audit", "error", "general", "slowquery"]
