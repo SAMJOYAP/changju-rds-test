@@ -27,7 +27,7 @@ provider "aws" {
   }
 }
 
-# [수정] 이름 중복 방지를 위한 랜덤 접미사 생성
+# 리소스 이름 중복 방지를 위한 랜덤 접미사
 resource "random_id" "suffix" {
   byte_length = 4
 }
@@ -67,27 +67,29 @@ locals {
   db_port             = local.engine_config[var.db_engine].port
   cloudwatch_exports  = local.engine_config[var.db_engine].logs
   
-  # [수정] 리소스 이름에 랜덤 접미사 결합
+  # 랜덤 값이 포함된 공통 이름 변수
   random_name = "${var.identifier}-${random_id.suffix.hex}"
 }
 
-# Default VPC and subnets
-data "aws_vpc" "default" {
-  default = true
+# 1. [수정] Default VPC 대신 EKS 클러스터 VPC를 태그로 검색
+data "aws_vpc" "selected" {
+  filter {
+    name   = "tag:Name"
+    values = ["eksctl-sesac-ref-impl-cluster/VPC"]
+  }
 }
 
-# 수정된 부분: 가용 영역에 상관없이 모든 서브넷을 가져옵니다.
-data "aws_subnets" "default" {
+# 2. [수정] 해당 VPC 내에서 'private' 태그가 붙은 모든 서브넷 검색
+# 이미지상 'toy-practice-eks-private-*' 서브넷들이 여러 AZ에 걸쳐 있습니다.
+data "aws_subnets" "selected" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    values = [data.aws_vpc.selected.id]
   }
 
-  # 추가: 특정 AZ에 편중되지 않도록 명시적으로 필터를 제외하거나 
-  # 아래와 같이 서브넷 상태가 'available'인 것만 가져오게 설정합니다.
   filter {
-    name   = "state"
-    values = ["available"]
+    name   = "tag:Name"
+    values = ["*private*"] 
   }
 }
 
@@ -98,26 +100,26 @@ resource "random_password" "db" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
-# [수정] DB Subnet Group: 이름에 랜덤 값 추가
+# 3. [수정] 위에서 찾은 'selected' 서브넷들을 사용 (2개 이상의 AZ 충족)
 resource "aws_db_subnet_group" "main" {
   name        = "${local.random_name}-subnet-group"
-  subnet_ids  = data.aws_subnets.default.ids
-  description = "Subnet group for ${var.identifier}"
+  subnet_ids  = data.aws_subnets.selected.ids
+  description = "Subnet group for ${var.identifier} in EKS VPC"
 
   tags = { Name = "${local.random_name}-subnet-group" }
 }
 
-# Security Group
+# 4. [수정] 보안 그룹의 VPC ID도 EKS VPC로 변경
 resource "aws_security_group" "rds" {
   name_prefix = "${var.identifier}-"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = data.aws_vpc.selected.id
   description = "Security group for ${var.identifier} RDS"
 
   ingress {
     from_port   = local.db_port
     to_port     = local.db_port
     protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    cidr_blocks = [data.aws_vpc.selected.cidr_block]
     description = "Database access from VPC"
   }
 
@@ -134,7 +136,7 @@ resource "aws_security_group" "rds" {
   }
 }
 
-# [수정] DB Parameter Group: 이름에 랜덤 값 추가
+# DB Parameter Group
 resource "aws_db_parameter_group" "main" {
   name   = "${local.random_name}-params"
   family = local.db_family
@@ -147,7 +149,7 @@ resource "aws_db_parameter_group" "main" {
 resource "aws_db_instance" "main" {
   count = local.is_aurora ? 0 : 1
 
-  identifier        = var.identifier # Instance ID는 중복 시 삭제가 쉬우므로 그대로 두거나 local.random_name으로 변경 가능
+  identifier        = var.identifier
   engine            = var.db_engine
   engine_version    = local.db_engine_version
   instance_class    = var.instance_class
@@ -183,7 +185,7 @@ resource "aws_db_instance" "main" {
 
 resource "aws_rds_cluster_parameter_group" "aurora" {
   count  = local.is_aurora ? 1 : 0
-  name   = "${local.random_name}-cluster-params" # [수정] 랜덤 이름 적용
+  name   = "${local.random_name}-cluster-params"
   family = local.db_family
 
   tags = { Name = "${local.random_name}-cluster-params" }
@@ -250,7 +252,6 @@ resource "aws_rds_cluster_instance" "reader" {
 
 # ─── Secrets Manager ───────────────────────────────────────────────────────
 
-# [수정] Secrets Manager: 이름에 랜덤 값 추가
 resource "aws_secretsmanager_secret" "db_credentials" {
   count       = var.secrets_manager ? 1 : 0
   name        = "${local.random_name}/db-credentials"
